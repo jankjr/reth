@@ -6,6 +6,8 @@ use crate::{
         DatabaseArgs,
     }, commands::rpc_client::RPCClient, dirs::{DataDirPath, MaybePlatformPath}, version::SHORT_VERSION
 };
+#[cfg(feature = "optimism")]
+use reth_node_optimism::OptimismEvmConfig;
 use clap::Parser;
 use eyre::Context;
 use futures::{Stream, StreamExt};
