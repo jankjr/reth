@@ -218,7 +218,10 @@ impl BodiesClient for FileClient {
         for hash in hashes {
             match self.bodies.get(&hash).cloned() {
                 Some(body) => bodies.push(body),
-                None => return Box::pin(async move { Err(RequestError::BadResponse) }),
+                None => {
+                    warn!(hash=%hash, "Could not find header");
+                    return return Box::pin(async move { Err(RequestError::BadResponse) })
+                },
             }
         }
 

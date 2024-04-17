@@ -105,7 +105,6 @@ impl ImportCommand {
         // create a new FileClient
         info!(target: "reth::cli", "Importing chain file");
         let file_client = Arc::new(FileClient::new(&self.path).await?);
-
         // override the tip
         let tip = file_client.tip().expect("file client has no tip");
         info!(target: "reth::cli", "Chain file imported");

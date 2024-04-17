@@ -4,9 +4,7 @@ use crate::{
     args::{
         utils::{chain_help, genesis_value_parser, SUPPORTED_CHAINS},
         DatabaseArgs,
-    },
-    dirs::{DataDirPath, MaybePlatformPath},
-    version::SHORT_VERSION,
+    }, commands::rpc_client::RPCClient, dirs::{DataDirPath, MaybePlatformPath}, version::SHORT_VERSION
 };
 use clap::Parser;
 use eyre::Context;
@@ -15,15 +13,14 @@ use reth_beacon_consensus::BeaconConsensus;
 use reth_config::Config;
 use reth_db::{database::Database, init_db};
 use reth_downloaders::{
-    bodies::bodies::BodiesDownloaderBuilder, file_client::FileClient,
+    bodies::bodies::BodiesDownloaderBuilder,
     headers::reverse_headers::ReverseHeadersDownloaderBuilder,
 };
 use reth_interfaces::consensus::Consensus;
 use reth_node_core::{events::node::NodeEvent, init::init_genesis};
 #[cfg(not(feature = "optimism"))]
 use reth_node_ethereum::EthEvmConfig;
-#[cfg(feature = "optimism")]
-use reth_node_optimism::OptimismEvmConfig;
+
 use reth_primitives::{stage::StageId, ChainSpec, PruneModes, B256};
 use reth_provider::{HeaderSyncMode, ProviderFactory, StageCheckpointReader};
 use reth_stages::{
@@ -37,7 +34,7 @@ use tracing::{debug, info};
 
 /// Syncs RLP encoded blocks from a file.
 #[derive(Debug, Parser)]
-pub struct ImportFromNodeCommand {
+pub struct ImportRPCCommand {
     /// The path to the configuration file to use.
     #[arg(long, value_name = "FILE", verbatim_doc_comment)]
     config: Option<PathBuf>,
@@ -67,13 +64,20 @@ pub struct ImportFromNodeCommand {
     #[command(flatten)]
     db: DatabaseArgs,
 
-    /// Url of the RPC to sync from
-    /// 
-    #[arg(value_name = "RPC_URL", verbatim_doc_comment)]
+    /// The RPC to use for importing blocks
+    #[arg(value_name = "RPC", verbatim_doc_comment)]
     rpc: String,
+
+    /// First block to fetch (inclusive)
+    #[arg(value_name = "START", long, default_value_t = 1)]
+    pub start: u64,
+
+    /// Last block to fetch (inclusive)
+    #[arg(value_name = "END", long)]
+    pub end: u64,
 }
 
-impl ImportFromNodeCommand {
+impl ImportRPCCommand {
     /// Execute `import` command
     pub async fn execute(self) -> eyre::Result<()> {
         info!(target: "reth::cli", "reth {} starting", SHORT_VERSION);
@@ -100,22 +104,18 @@ impl ImportFromNodeCommand {
         let consensus = Arc::new(BeaconConsensus::new(self.chain.clone()));
         info!(target: "reth::cli", "Consensus engine initialized");
 
-        // create a new FileClient
-        info!(target: "reth::cli", "Importing chain file");
-        let file_client = Arc::new(FileClient::new(&self.path).await?);
 
-        // override the tip
-        let tip = file_client.tip().expect("file client has no tip");
-        info!(target: "reth::cli", "Chain file imported");
+        let rpc_client = Arc::new(RPCClient::create(&self.rpc, self.start, self.end).await?);
 
-        let provider = Arc::new(Provider::<Http>::try_from(self.rpc)?);
+        let tip = rpc_client.tip().expect("rpc client has no tip");
+        info!(target: "reth::cli", "Chain rpc imported");
 
         let (mut pipeline, events) = self
             .build_import_pipeline(
                 config,
                 provider_factory.clone(),
                 &consensus,
-                file_client,
+                rpc_client,
                 StaticFileProducer::new(
                     provider_factory.clone(),
                     provider_factory.static_file_provider(),
@@ -123,6 +123,7 @@ impl ImportFromNodeCommand {
                 ),
             )
             .await?;
+
 
         // override the tip
         pipeline.set_tip(tip);
@@ -155,23 +156,23 @@ impl ImportFromNodeCommand {
         config: Config,
         provider_factory: ProviderFactory<DB>,
         consensus: &Arc<C>,
-        file_client: Arc<FileClient>,
+        rpc_client: Arc<RPCClient>,
         static_file_producer: StaticFileProducer<DB>,
     ) -> eyre::Result<(Pipeline<DB>, impl Stream<Item = NodeEvent>)>
     where
         DB: Database + Clone + Unpin + 'static,
         C: Consensus + 'static,
     {
-        if !file_client.has_canonical_blocks() {
+        if !rpc_client.has_canonical_blocks() {
             eyre::bail!("unable to import non canonical blocks");
         }
 
         let header_downloader = ReverseHeadersDownloaderBuilder::new(config.stages.headers)
-            .build(file_client.clone(), consensus.clone())
+            .build(rpc_client.clone(), consensus.clone())
             .into_task();
 
         let body_downloader = BodiesDownloaderBuilder::new(config.stages.bodies)
-            .build(file_client.clone(), consensus.clone(), provider_factory.clone())
+            .build(rpc_client.clone(), consensus.clone(), provider_factory.clone())
             .into_task();
 
         let (tip_tx, tip_rx) = watch::channel(B256::ZERO);
@@ -183,7 +184,7 @@ impl ImportFromNodeCommand {
         let factory =
             reth_revm::EvmProcessorFactory::new(self.chain.clone(), OptimismEvmConfig::default());
 
-        let max_block = file_client.max_block().unwrap_or(0);
+        let max_block = rpc_client.max_block().unwrap_or(0);
 
         let mut pipeline = Pipeline::builder()
             .with_tip_sender(tip_tx)
@@ -232,20 +233,3 @@ impl ImportFromNodeCommand {
             .wrap_err_with(|| format!("Could not load config file {config_path:?}"))
     }
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-
-//     #[test]
-//     fn parse_common_import_command_chain_args() {
-//         for chain in SUPPORTED_CHAINS {
-//             let args: ImportCommand = ImportCommand::parse_from(["reth", "--chain", chain, "."]);
-//             assert_eq!(
-//                 Ok(args.chain.chain),
-//                 chain.parse::<reth_primitives::Chain>(),
-//                 "failed to parse chain {chain}"
-//             );
-//         }
-//     }
-// }

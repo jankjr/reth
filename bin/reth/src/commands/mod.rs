@@ -5,7 +5,9 @@ pub mod db;
 pub mod debug_cmd;
 pub mod dump_genesis;
 pub mod import;
+pub mod import_rpc;
 pub mod init_cmd;
+pub mod rpc_client;
 
 pub mod node;
 pub mod p2p;
