@@ -69,7 +69,7 @@ pub enum FileClientError {
 }
 
 impl RPCClient {
-    /// Create a new file client from a file path.
+    /// Create a new RPC client from an RPC url
     pub async fn create(rpc_url: &String, start: u64, end: u64) -> eyre::Result<Self> {
         let provider = Arc::new(Provider::<Http>::try_from(rpc_url)?);
         let mut client = RPCClient { tip: None, provider, start, end, headers: HashMap::new(), hash_to_number: HashMap::new(), bodies: HashMap::new() };
@@ -119,6 +119,7 @@ impl RPCClient {
         self
     }
 
+    /// Load the headers and bodies for the file client.
     pub async fn load(&mut self) -> eyre::Result<()> {
         let blocks = RangeInclusive::new(self.start, self.end).collect::<Vec<_>>();
         for chunk in blocks.chunks(CHUNK_SIZE) {
@@ -272,12 +273,13 @@ fn ethers_block_to_block(block: EthersBlock<EthersTransaction>) -> eyre::Result<
         base_fee_per_gas: block.base_fee_per_gas.map(|fee| fee.as_u64()),
         ommers_hash: block.uncles_hash.0.into(),
         gas_used: block.gas_used.as_u64(),
-        withdrawals_root: None,
+        withdrawals_root: block.withdrawals_root.map(|b| b.0.into()),
         logs_bloom: block.logs_bloom.unwrap_or_default().0.into(),
         blob_gas_used: None,
         excess_blob_gas: None,
-        parent_beacon_block_root: None,
+        parent_beacon_block_root: None
     };
+    print!("header: {:?}", header);
     let mut body: Vec<TransactionSigned> = vec![];
     for tx in block.transactions {
         let rlp = tx.rlp();

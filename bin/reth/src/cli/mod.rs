@@ -6,8 +6,7 @@ use crate::{
         LogArgs,
     },
     commands::{
-        config_cmd, db, debug_cmd, dump_genesis, import, init_cmd, node, node::NoArgs, p2p,
-        recover, stage, test_vectors,
+        config_cmd, db, debug_cmd, dump_genesis, import, import_rpc, init_cmd, node::{self, NoArgs}, p2p, recover, stage, test_vectors
     },
     core::cli::runner::CliRunner,
     version::{LONG_VERSION, SHORT_VERSION},
@@ -154,6 +153,7 @@ impl<Ext: clap::Args + fmt::Debug> Cli<Ext> {
             Commands::Config(command) => runner.run_until_ctrl_c(command.execute()),
             Commands::Debug(command) => runner.run_command_until_exit(|ctx| command.execute(ctx)),
             Commands::Recover(command) => runner.run_command_until_exit(|ctx| command.execute(ctx)),
+            Commands::ImportRPCCommand(command) => runner.run_command_until_exit(|_| command.execute()),
         }
     }
 
@@ -177,8 +177,14 @@ pub enum Commands<Ext: clap::Args + fmt::Debug = NoArgs> {
     #[command(name = "init")]
     Init(init_cmd::InitCommand),
     /// This syncs RLP encoded blocks from a file.
+
     #[command(name = "import")]
     Import(import::ImportCommand),
+
+    /// This syncs blocks from an RPC endpoint.
+    #[command(name = "import-rpc")]
+    ImportRPCCommand(import_rpc::ImportRPCCommand),
+
     /// Dumps genesis block JSON configuration to stdout.
     DumpGenesis(dump_genesis::DumpGenesisCommand),
     /// Database debugging utilities

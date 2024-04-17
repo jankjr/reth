@@ -80,7 +80,7 @@ pub struct ImportRPCCommand {
 }
 
 impl ImportRPCCommand {
-    /// Execute `import` command
+    /// Execute `import-rpc` command
     pub async fn execute(self) -> eyre::Result<()> {
         info!(target: "reth::cli", "reth {} starting", SHORT_VERSION);
 
