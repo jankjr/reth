@@ -279,7 +279,6 @@ fn ethers_block_to_block(block: EthersBlock<EthersTransaction>) -> eyre::Result<
         excess_blob_gas: None,
         parent_beacon_block_root: None
     };
-    print!("header: {:?}", header);
     let mut body: Vec<TransactionSigned> = vec![];
     for tx in block.transactions {
         let rlp = tx.rlp();
@@ -293,7 +292,7 @@ fn ethers_block_to_block(block: EthersBlock<EthersTransaction>) -> eyre::Result<
         BlockBody {
             transactions: body,
             ommers: vec![],
-            withdrawals: None
+            withdrawals: Some(Withdrawals::new(vec![])),
         }
     ))
 }
