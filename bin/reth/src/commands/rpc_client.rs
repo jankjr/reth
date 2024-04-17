@@ -12,11 +12,10 @@ use reth_interfaces::p2p::{
 
 use ethers_core::types::{Block as EthersBlock, Transaction as EthersTransaction};
 use reth_primitives::{
-    U256, BlockBody, BlockHash, BlockHashOrNumber, BlockNumber, Header, HeadersDirection, PeerId, TransactionSigned, B256
+    BlockBody, BlockHash, BlockHashOrNumber, BlockNumber, Header, HeadersDirection, PeerId, TransactionSigned, Withdrawals, B256, U256
 };
 use std::{collections::HashMap, ops::RangeInclusive, sync::Arc};
 use tokio::sync::Semaphore;
-use thiserror::Error;
 
 use futures::future;
 
@@ -53,18 +52,6 @@ pub struct RPCClient {
     bodies: HashMap<BlockHash, BlockBody>,
 
     tip: Option<B256>,
-
-}
-
-#[derive(Debug, Error)]
-pub enum FileClientError {
-    /// An error occurred when opening or reading the file.
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-
-    /// An error occurred when decoding blocks, headers, or rlp headers from the file.
-    #[error(transparent)]
-    Rlp(#[from] alloy_rlp::Error),
 
 }
 
@@ -255,7 +242,6 @@ impl DownloadClient for RPCClient {
     }
 }
 
-
 fn ethers_block_to_block(block: EthersBlock<EthersTransaction>) -> eyre::Result<(Header, BlockBody)> {
     let header = Header {
         parent_hash: block.parent_hash.0.into(),
@@ -275,9 +261,9 @@ fn ethers_block_to_block(block: EthersBlock<EthersTransaction>) -> eyre::Result<
         gas_used: block.gas_used.as_u64(),
         withdrawals_root: block.withdrawals_root.map(|b| b.0.into()),
         logs_bloom: block.logs_bloom.unwrap_or_default().0.into(),
-        blob_gas_used: None,
-        excess_blob_gas: None,
-        parent_beacon_block_root: None
+        blob_gas_used: block.blob_gas_used.map(|f|f.as_u64()),
+        excess_blob_gas: block.excess_blob_gas.map(|f|f.as_u64()),
+        parent_beacon_block_root: block.parent_beacon_block_root.map(|b| b.0.into()),
     };
     let mut body: Vec<TransactionSigned> = vec![];
     for tx in block.transactions {
