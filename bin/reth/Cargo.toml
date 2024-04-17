@@ -52,6 +52,9 @@ reth-node-optimism = { workspace = true, optional = true, features = ["optimism"
 reth-node-core.workspace = true
 reth-node-builder.workspace = true
 
+ethers-core = { version = "2.0.14", features = ["optimism"] }
+ethers-providers = { version = "2.0.14", default-features = false, features = ["ws", "rustls", "optimism"] }
+
 # crypto
 alloy-rlp.workspace = true
 alloy-chains.workspace = true

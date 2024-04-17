@@ -5759,6 +5759,8 @@ dependencies = [
  "comfy-table",
  "confy",
  "crossterm",
+ "ethers-core",
+ "ethers-providers",
  "eyre",
  "fdlimit",
  "futures",
@@ -8631,8 +8633,11 @@ checksum = "212d5dcb2a1ce06d81107c3d0ffa3121fe974b73f068c8282cb1c32328113b6c"
 dependencies = [
  "futures-util",
  "log",
+ "rustls",
  "tokio",
+ "tokio-rustls",
  "tungstenite",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -9048,6 +9053,7 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.8.5",
+ "rustls",
  "sha1",
  "thiserror",
  "url",

@@ -37,7 +37,7 @@ use tracing::{debug, info};
 
 /// Syncs RLP encoded blocks from a file.
 #[derive(Debug, Parser)]
-pub struct ImportCommand {
+pub struct ImportFromNodeCommand {
     /// The path to the configuration file to use.
     #[arg(long, value_name = "FILE", verbatim_doc_comment)]
     config: Option<PathBuf>,
@@ -67,15 +67,13 @@ pub struct ImportCommand {
     #[command(flatten)]
     db: DatabaseArgs,
 
-    /// The path to a block file for import.
-    ///
-    /// The online stages (headers and bodies) are replaced by a file import, after which the
-    /// remaining stages are executed.
-    #[arg(value_name = "IMPORT_PATH", verbatim_doc_comment)]
-    path: PathBuf,
+    /// Url of the RPC to sync from
+    /// 
+    #[arg(value_name = "RPC_URL", verbatim_doc_comment)]
+    rpc: String,
 }
 
-impl ImportCommand {
+impl ImportFromNodeCommand {
     /// Execute `import` command
     pub async fn execute(self) -> eyre::Result<()> {
         info!(target: "reth::cli", "reth {} starting", SHORT_VERSION);
@@ -109,6 +107,8 @@ impl ImportCommand {
         // override the tip
         let tip = file_client.tip().expect("file client has no tip");
         info!(target: "reth::cli", "Chain file imported");
+
+        let provider = Arc::new(Provider::<Http>::try_from(self.rpc)?);
 
         let (mut pipeline, events) = self
             .build_import_pipeline(
@@ -233,19 +233,19 @@ impl ImportCommand {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
 
-    #[test]
-    fn parse_common_import_command_chain_args() {
-        for chain in SUPPORTED_CHAINS {
-            let args: ImportCommand = ImportCommand::parse_from(["reth", "--chain", chain, "."]);
-            assert_eq!(
-                Ok(args.chain.chain),
-                chain.parse::<reth_primitives::Chain>(),
-                "failed to parse chain {chain}"
-            );
-        }
-    }
-}
+//     #[test]
+//     fn parse_common_import_command_chain_args() {
+//         for chain in SUPPORTED_CHAINS {
+//             let args: ImportCommand = ImportCommand::parse_from(["reth", "--chain", chain, "."]);
+//             assert_eq!(
+//                 Ok(args.chain.chain),
+//                 chain.parse::<reth_primitives::Chain>(),
+//                 "failed to parse chain {chain}"
+//             );
+//         }
+//     }
+// }

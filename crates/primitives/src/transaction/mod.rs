@@ -135,6 +135,15 @@ pub enum Transaction {
 // === impl Transaction ===
 
 impl Transaction {
+    /// Short-circuit signer for optimism deposit txs
+    pub fn signer(&self) -> Option<Address> {
+        #[cfg(feature = "optimism")]
+        if let Transaction::Deposit(TxDeposit { from, .. }) = self {
+            return Some(*from);
+        }
+        None
+    }
+
     /// Heavy operation that return signature hash over rlp encoded transaction.
     /// It is only for signature signing or signer recovery.
     pub fn signature_hash(&self) -> B256 {

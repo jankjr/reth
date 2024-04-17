@@ -38,6 +38,9 @@ pub struct FileClient {
 
     /// The buffered bodies retrieved when fetching new headers.
     bodies: HashMap<BlockHash, BlockBody>,
+
+    /// Chain tip set based on highest incremental block hash
+    tip: Option<B256>,
 }
 
 /// An error that can occur when constructing and using a [`FileClient`].
@@ -72,6 +75,8 @@ impl FileClient {
         let mut headers = HashMap::new();
         let mut hash_to_number = HashMap::new();
         let mut bodies = HashMap::new();
+        let mut max_bock = 0u64;
+        let mut tip = None;
 
         // use with_capacity to make sure the internal buffer contains the entire file
         let mut stream = FramedRead::with_capacity(&reader[..], BlockFileCodec, file_len as usize);
@@ -79,6 +84,11 @@ impl FileClient {
         while let Some(block_res) = stream.next().await {
             let block = block_res?;
             let block_hash = block.header.hash_slow();
+
+            if block.number > max_bock {
+                max_bock = block.number;
+                tip = Some(block_hash);
+            }
 
             // add to the internal maps
             headers.insert(block.header.number, block.header.clone());
@@ -95,12 +105,12 @@ impl FileClient {
 
         trace!(blocks = headers.len(), "Initialized file client");
 
-        Ok(Self { headers, hash_to_number, bodies })
+        Ok(Self { headers, hash_to_number, bodies, tip })
     }
 
     /// Get the tip hash of the chain.
     pub fn tip(&self) -> Option<B256> {
-        self.headers.get(&(self.headers.len() as u64)).map(|h| h.hash_slow())
+        self.tip
     }
 
     /// Returns the highest block number of this client has or `None` if empty
@@ -218,7 +228,7 @@ impl BodiesClient for FileClient {
 
 impl DownloadClient for FileClient {
     fn report_bad_message(&self, _peer_id: PeerId) {
-        warn!("Reported a bad message on a file client, the file may be corrupted or invalid");
+        warn!("Reported a bad message on a file client, the file may be corrupted or invalid. Tip {0:?}", self.tip);
         // noop
     }
 
