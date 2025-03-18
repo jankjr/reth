@@ -1,7 +1,7 @@
 use alloy_consensus::BlockHeader as _;
 use alloy_eips::BlockId;
 use alloy_evm::block::calc::{base_block_reward_pre_merge, block_reward, ommer_reward};
-use alloy_primitives::{map::HashSet, Bytes, B256, U256};
+use alloy_primitives::{map::HashSet, BlockNumber, Bytes, B256, U256};
 use alloy_rpc_types_eth::{
     state::{EvmOverrides, StateOverride},
     transaction::TransactionRequest,
@@ -30,14 +30,15 @@ use revm_inspectors::{
     opcode::OpcodeGasInspector,
     tracing::{parity::populate_state_diff, TracingInspector, TracingInspectorConfig},
 };
-use std::sync::Arc;
-use tokio::sync::{AcquireError, OwnedSemaphorePermit};
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::{AcquireError, OwnedSemaphorePermit, RwLock};
 
 /// `trace` API implementation.
 ///
 /// This type provides the functionality for handling `trace` related requests.
 pub struct TraceApi<Eth> {
     inner: Arc<TraceApiInner<Eth>>,
+    block_traces: RwLock<HashMap<BlockNumber, Vec<LocalizedTransactionTrace>>>,
 }
 
 // === impl TraceApi ===
@@ -50,7 +51,7 @@ impl<Eth> TraceApi<Eth> {
         eth_config: EthConfig,
     ) -> Self {
         let inner = Arc::new(TraceApiInner { eth_api, blocking_task_guard, eth_config });
-        Self { inner }
+        Self { inner, block_traces: RwLock::new(HashMap::new()) }
     }
 
     /// Acquires a permit to execute a tracing call.
@@ -218,7 +219,7 @@ where
     ) -> Result<Option<LocalizedTransactionTrace>, Eth::Error> {
         if indices.len() != 1 {
             // The OG impl failed if it gets more than a single index
-            return Ok(None)
+            return Ok(None);
         }
         self.trace_get_index(hash, indices[0]).await
     }
@@ -258,7 +259,7 @@ where
             return Err(EthApiError::InvalidParams(
                 "invalid parameters: fromBlock cannot be greater than toBlock".to_string(),
             )
-            .into())
+            .into());
         }
 
         // ensure that the range is not too large, since we need to fetch all blocks in the range
@@ -267,7 +268,7 @@ where
             return Err(EthApiError::InvalidParams(
                 "Block range too large; currently limited to 100 blocks".to_string(),
             )
-            .into())
+            .into());
         }
 
         // fetch all blocks in that range
@@ -320,7 +321,7 @@ where
             } else {
                 // no block reward, means we're past the Paris hardfork and don't expect any rewards
                 // because the blocks in ascending order
-                break
+                break;
             }
         }
 
@@ -331,7 +332,7 @@ where
             if after < all_traces.len() {
                 all_traces.drain(..after);
             } else {
-                return Ok(vec![])
+                return Ok(vec![]);
             }
         }
 
@@ -369,6 +370,17 @@ where
         &self,
         block_id: BlockId,
     ) -> Result<Option<Vec<LocalizedTransactionTrace>>, Eth::Error> {
+        let mut block_traces = self.block_traces.write().await;
+        let block_number =
+            if let BlockId::Number(alloy_eips::BlockNumberOrTag::Number(block_number)) = block_id {
+                if let Some(traces) = block_traces.get(&block_number) {
+                    return Ok(Some(traces.clone()));
+                }
+                Some(block_number)
+            } else {
+                None
+            };
+
         let traces = self.eth_api().trace_block_with(
             block_id,
             None,
@@ -379,7 +391,6 @@ where
                 Ok(traces)
             },
         );
-
         let block = self.eth_api().recovered_block(block_id);
         let (maybe_traces, maybe_block) = futures::try_join!(traces, block)?;
 
@@ -394,6 +405,13 @@ where
                     base_block_reward,
                 ));
             }
+        }
+
+        if let (Some(block_number), Some(traces)) = (block_number, &maybe_traces) {
+            if block_traces.len() > 1024 {
+                block_traces.clear();
+            }
+            block_traces.insert(block_number, traces.clone());
         }
 
         Ok(maybe_traces)
@@ -506,7 +524,7 @@ where
         };
 
         if is_paris_activated {
-            return Ok(None)
+            return Ok(None);
         }
 
         Ok(Some(base_block_reward_pre_merge(&chain_spec, header.number())))
@@ -682,7 +700,7 @@ impl<Eth> std::fmt::Debug for TraceApi<Eth> {
 }
 impl<Eth> Clone for TraceApi<Eth> {
     fn clone(&self) -> Self {
-        Self { inner: Arc::clone(&self.inner) }
+        Self { inner: Arc::clone(&self.inner), block_traces: RwLock::new(HashMap::new()) }
     }
 }
 
