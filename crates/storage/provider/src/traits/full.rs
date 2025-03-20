@@ -8,9 +8,8 @@ use crate::{
 use reth_chain_state::{CanonStateSubscriptions, ForkChoiceSubscriptions};
 use reth_chainspec::EthereumHardforks;
 use reth_node_types::{BlockTy, HeaderTy, NodeTypesWithDB, ReceiptTy, TxTy};
-use reth_storage_api::NodePrimitivesProvider;
-use std::fmt::Debug;
 
+use std::fmt::Debug;
 /// Helper trait to unify all provider traits for simplicity.
 pub trait FullProvider<N: NodeTypesWithDB>:
     DatabaseProviderFactory<DB = N::DB>
@@ -25,6 +24,7 @@ pub trait FullProvider<N: NodeTypesWithDB>:
     + StateProviderFactory
     + ChainSpecProvider<ChainSpec = N::ChainSpec>
     + ChangeSetReader
+    + StorageChangeSetReader
     + CanonStateSubscriptions
     + ForkChoiceSubscriptions<Header = HeaderTy<N>>
     + StageCheckpointReader
@@ -48,6 +48,7 @@ impl<T, N: NodeTypesWithDB> FullProvider<N> for T where
         + StateProviderFactory
         + ChainSpecProvider<ChainSpec = N::ChainSpec>
         + ChangeSetReader
+        + StorageChangeSetReader
         + CanonStateSubscriptions
         + ForkChoiceSubscriptions<Header = HeaderTy<N>>
         + StageCheckpointReader

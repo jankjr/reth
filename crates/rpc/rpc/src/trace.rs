@@ -1,4 +1,4 @@
-use alloy_consensus::BlockHeader as _;
+use alloy_consensus::{BlockHeader as _, Sealable};
 use alloy_eips::{BlockId, BlockNumberOrTag};
 use alloy_evm::block::calc::{base_block_reward_pre_merge, block_reward, ommer_reward};
 use alloy_primitives::{map::HashSet, BlockNumber, Bytes, B256, U256};
@@ -18,6 +18,7 @@ use jsonrpsee::core::RpcResult;
 use reth_chainspec::{ChainSpecProvider, EthChainSpec, EthereumHardfork, MAINNET, SEPOLIA};
 use reth_evm::ConfigureEvm;
 use reth_primitives_traits::{BlockBody, BlockHeader};
+use reth_provider::{BlockNumReader, BlockReader, ChainSpecProvider, StorageChangeSetReader};
 use reth_revm::{database::StateProviderDatabase, db::CacheDB};
 use reth_rpc_api::TraceApiServer;
 use reth_rpc_eth_api::{helpers::TraceExt, FromEthApiError, RpcNodeCore};
@@ -30,28 +31,38 @@ use revm_inspectors::{
     opcode::OpcodeGasInspector,
     tracing::{parity::populate_state_diff, TracingInspector, TracingInspectorConfig},
 };
-use std::{collections::HashMap, sync::Arc};
+use revm_primitives::Address;
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 use tokio::sync::{AcquireError, OwnedSemaphorePermit, RwLock};
 
 /// `trace` API implementation.
 ///
 /// This type provides the functionality for handling `trace` related requests.
-pub struct TraceApi<Eth> {
+pub struct TraceApi<Eth, Provider> {
     inner: Arc<TraceApiInner<Eth>>,
     block_traces: RwLock<HashMap<BlockNumber, Vec<TraceResultsWithTransactionHash>>>,
+    block_reader: Arc<Provider>,
 }
 
 // === impl TraceApi ===
 
-impl<Eth> TraceApi<Eth> {
+impl<Eth, Provider> TraceApi<Eth, Provider> {
     /// Create a new instance of the [`TraceApi`]
     pub fn new(
         eth_api: Eth,
         blocking_task_guard: BlockingTaskGuard,
         eth_config: EthConfig,
+        block_reader: Provider,
     ) -> Self {
         let inner = Arc::new(TraceApiInner { eth_api, blocking_task_guard, eth_config });
-        Self { inner, block_traces: RwLock::new(HashMap::new()) }
+        Self {
+            inner,
+            block_traces: RwLock::new(HashMap::new()),
+            block_reader: Arc::new(block_reader),
+        }
     }
 
     /// Acquires a permit to execute a tracing call.
@@ -67,7 +78,7 @@ impl<Eth> TraceApi<Eth> {
     }
 }
 
-impl<Eth: RpcNodeCore> TraceApi<Eth> {
+impl<Eth: RpcNodeCore, Provider> TraceApi<Eth, Provider> {
     /// Access the underlying provider.
     pub fn provider(&self) -> &Eth::Provider {
         self.inner.eth_api.provider()
@@ -76,9 +87,10 @@ impl<Eth: RpcNodeCore> TraceApi<Eth> {
 
 // === impl TraceApi ===
 
-impl<Eth> TraceApi<Eth>
+impl<Eth, Provider> TraceApi<Eth, Provider>
 where
     Eth: TraceExt + 'static,
+    Provider: StorageChangeSetReader + 'static,
 {
     /// Executes the given call and returns a number of possible traces for it.
     pub async fn trace_call(
@@ -405,15 +417,50 @@ where
         block_id: BlockId,
         trace_types: HashSet<TraceType>,
     ) -> Result<Option<Vec<TraceResultsWithTransactionHash>>, Eth::Error> {
-        let mut block_traces = self.block_traces.write().await;
         let is_state_diff = trace_types.len() == 1 && trace_types.contains(&TraceType::StateDiff);
+        tracing::info!(target: "rpc::trace", "replay_block_transactions: block_id: {:?} is_state_diff:{}", block_id, is_state_diff);
         if let BlockId::Number(BlockNumberOrTag::Number(block_number)) = block_id {
             if is_state_diff {
+                let mut block_traces = self.block_traces.write().await;
                 if let Some(traces) = block_traces.get(&block_number) {
+                    tracing::info!(target: "rpc::trace", "returnning cached traces");
                     return Ok(Some(traces.clone()));
                 }
+                tracing::info!(target: "rpc::trace", "no cached traces, fetching from db");
+                let block = if let Some(block) = self.eth_api().recovered_block(block_id).await? {
+                    block
+                } else {
+                    return Err(Eth::Error::from_eth_err(EthApiError::UnknownBlockOrTxIndex));
+                };
+
+                let changed_accounts = self
+                    .block_reader
+                    .storage_changeset(block_number)
+                    .map_err(Eth::Error::from_eth_err)?;
+
+                let mut diff_map: BTreeMap<Address, AccountDiff> = BTreeMap::new();
+                for (block_addr, state_diff) in changed_accounts.iter() {
+                    let addr = block_addr.address();
+                    let diff = diff_map.entry(addr).or_insert_with(AccountDiff::default);
+
+                    diff.storage.insert(state_diff.key, Delta::Added(state_diff.value.into()));
+                }
+                let diff: StateDiff = StateDiff(diff_map);
+                let out = TraceResultsWithTransactionHash {
+                    transaction_hash: block.header().hash_slow(),
+                    full_trace: TraceResults {
+                        state_diff: Some(diff),
+                        output: Bytes::new(),
+                        trace: vec![],
+                        vm_trace: None,
+                    },
+                };
+                tracing::info!(target: "rpc::trace", "inserting cached traces");
+                block_traces.insert(block_number, vec![out.clone()]);
+                return Ok(Some(vec![out]));
             }
         }
+
         let out = self
             .eth_api()
             .trace_block_with(
@@ -439,16 +486,7 @@ where
                 },
             )
             .await?;
-        if let (BlockId::Number(BlockNumberOrTag::Number(block_number)), Some(out)) =
-            (block_id, &out)
-        {
-            if block_traces.len() > 1024 {
-                block_traces.retain(|block, _| *block < block_number - 512);
-            }
-            if is_state_diff {
-                block_traces.insert(block_number, out.clone());
-            }
-        }
+
         Ok(out)
     }
 
@@ -573,9 +611,10 @@ where
 }
 
 #[async_trait]
-impl<Eth> TraceApiServer for TraceApi<Eth>
+impl<Eth, Provider> TraceApiServer for TraceApi<Eth, Provider>
 where
     Eth: TraceExt + 'static,
+    Provider: StorageChangeSetReader + 'static,
 {
     /// Executes the given call and returns a number of possible traces for it.
     ///
@@ -696,14 +735,18 @@ where
     }
 }
 
-impl<Eth> std::fmt::Debug for TraceApi<Eth> {
+impl<Eth, Provider> std::fmt::Debug for TraceApi<Eth, Provider> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TraceApi").finish_non_exhaustive()
     }
 }
-impl<Eth> Clone for TraceApi<Eth> {
+impl<Eth, Provider> Clone for TraceApi<Eth, Provider> {
     fn clone(&self) -> Self {
-        Self { inner: Arc::clone(&self.inner), block_traces: RwLock::new(HashMap::new()) }
+        Self {
+            inner: Arc::clone(&self.inner),
+            block_traces: RwLock::new(HashMap::new()),
+            block_reader: Arc::clone(&self.block_reader),
+        }
     }
 }
 

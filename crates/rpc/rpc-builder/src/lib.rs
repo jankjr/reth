@@ -39,7 +39,7 @@ use reth_network_api::{noop::NoopNetwork, NetworkInfo, Peers};
 use reth_primitives_traits::NodePrimitives;
 use reth_provider::{
     AccountReader, BlockReader, BlockReaderIdExt, CanonStateSubscriptions, ChainSpecProvider,
-    ChangeSetReader, FullRpcProvider, ProviderBlock, StateProviderFactory,
+    ChangeSetReader, FullRpcProvider, ProviderBlock, StateProviderFactory, StorageChangeSetReader,
 };
 use reth_rpc::{
     AdminApi, DebugApi, EngineEthApi, EthApi, EthApiBuilder, EthBundle, MinerApi, NetApi,
@@ -118,7 +118,8 @@ where
     Provider: FullRpcProvider<Block = N::Block, Receipt = N::Receipt, Header = N::BlockHeader>
         + CanonStateSubscriptions<Primitives = N>
         + AccountReader
-        + ChangeSetReader,
+        + ChangeSetReader
+        + StorageChangeSetReader,
     Pool: TransactionPool + 'static,
     Network: NetworkInfo + Peers + Clone + 'static,
     Tasks: TaskSpawner + Clone + 'static,
@@ -205,6 +206,7 @@ where
     where
         P: BlockReader<Block = N::Block, Header = N::BlockHeader, Receipt = N::Receipt>
             + StateProviderFactory
+            + StorageChangeSetReader
             + 'static,
     {
         let Self {
@@ -537,7 +539,8 @@ where
     Provider: FullRpcProvider<Block = N::Block, Receipt = N::Receipt, Header = N::BlockHeader>
         + CanonStateSubscriptions<Primitives = N>
         + AccountReader
-        + ChangeSetReader,
+        + ChangeSetReader
+        + StorageChangeSetReader,
     Pool: TransactionPool + 'static,
     Network: NetworkInfo + Peers + Clone + 'static,
     Tasks: TaskSpawner + Clone + 'static,
@@ -918,7 +921,8 @@ where
             Receipt = N::Receipt,
             Transaction = N::SignedTx,
         > + AccountReader
-        + ChangeSetReader,
+        + ChangeSetReader
+        + StorageChangeSetReader,
     Network: NetworkInfo + Peers + Clone + 'static,
     Tasks: TaskSpawner + Clone + 'static,
     EthApi: EthApiServer<
@@ -1033,7 +1037,8 @@ where
             Transaction = N::SignedTx,
             Receipt = N::Receipt,
         > + AccountReader
-        + ChangeSetReader,
+        + ChangeSetReader
+        + StorageChangeSetReader,
     Network: NetworkInfo + Peers + Clone + 'static,
     Tasks: TaskSpawner + Clone + 'static,
     EthApi: EthApiTypes,
@@ -1044,11 +1049,16 @@ where
     /// # Panics
     ///
     /// If called outside of the tokio runtime. See also [`Self::eth_api`]
-    pub fn trace_api(&self) -> TraceApi<EthApi>
+    pub fn trace_api(&self) -> TraceApi<EthApi, Provider>
     where
         EthApi: TraceExt,
     {
-        TraceApi::new(self.eth_api().clone(), self.blocking_pool_guard.clone(), self.eth_config)
+        TraceApi::new(
+            self.eth_api().clone(),
+            self.blocking_pool_guard.clone(),
+            self.eth_config,
+            self.provider.clone(),
+        )
     }
 
     /// Instantiates [`EthBundle`] Api
@@ -1107,7 +1117,8 @@ where
     Provider: FullRpcProvider<Block = N::Block>
         + CanonStateSubscriptions<Primitives = N>
         + AccountReader
-        + ChangeSetReader,
+        + ChangeSetReader
+        + StorageChangeSetReader,
     Pool: TransactionPool + 'static,
     Network: NetworkInfo + Peers + Clone + 'static,
     Tasks: TaskSpawner + Clone + 'static,
@@ -1227,6 +1238,7 @@ where
                             eth_api.clone(),
                             self.blocking_pool_guard.clone(),
                             self.eth_config,
+                            self.provider.clone(),
                         )
                         .into_rpc()
                         .into(),
