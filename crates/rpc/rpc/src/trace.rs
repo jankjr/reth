@@ -1,5 +1,5 @@
 use alloy_consensus::BlockHeader as _;
-use alloy_eips::BlockId;
+use alloy_eips::{BlockId, BlockNumberOrTag};
 use alloy_evm::block::calc::{base_block_reward_pre_merge, block_reward, ommer_reward};
 use alloy_primitives::{map::HashSet, BlockNumber, Bytes, B256, U256};
 use alloy_rpc_types_eth::{
@@ -38,7 +38,7 @@ use tokio::sync::{AcquireError, OwnedSemaphorePermit, RwLock};
 /// This type provides the functionality for handling `trace` related requests.
 pub struct TraceApi<Eth> {
     inner: Arc<TraceApiInner<Eth>>,
-    block_traces: RwLock<HashMap<BlockNumber, Vec<LocalizedTransactionTrace>>>,
+    block_traces: RwLock<HashMap<BlockNumber, Vec<TraceResultsWithTransactionHash>>>,
 }
 
 // === impl TraceApi ===
@@ -370,17 +370,6 @@ where
         &self,
         block_id: BlockId,
     ) -> Result<Option<Vec<LocalizedTransactionTrace>>, Eth::Error> {
-        let mut block_traces = self.block_traces.write().await;
-        let block_number =
-            if let BlockId::Number(alloy_eips::BlockNumberOrTag::Number(block_number)) = block_id {
-                if let Some(traces) = block_traces.get(&block_number) {
-                    return Ok(Some(traces.clone()));
-                }
-                Some(block_number)
-            } else {
-                None
-            };
-
         let traces = self.eth_api().trace_block_with(
             block_id,
             None,
@@ -407,13 +396,6 @@ where
             }
         }
 
-        if let (Some(block_number), Some(traces)) = (block_number, &maybe_traces) {
-            if block_traces.len() > 1024 {
-                block_traces.clear();
-            }
-            block_traces.insert(block_number, traces.clone());
-        }
-
         Ok(maybe_traces)
     }
 
@@ -423,7 +405,17 @@ where
         block_id: BlockId,
         trace_types: HashSet<TraceType>,
     ) -> Result<Option<Vec<TraceResultsWithTransactionHash>>, Eth::Error> {
-        self.eth_api()
+        let mut block_traces = self.block_traces.write().await;
+        let is_state_diff = trace_types.len() == 1 && trace_types.contains(&TraceType::StateDiff);
+        if let BlockId::Number(BlockNumberOrTag::Number(block_number)) = block_id {
+            if is_state_diff {
+                if let Some(traces) = block_traces.get(&block_number) {
+                    return Ok(Some(traces.clone()));
+                }
+            }
+        }
+        let out = self
+            .eth_api()
             .trace_block_with(
                 block_id,
                 None,
@@ -446,7 +438,18 @@ where
                     Ok(trace)
                 },
             )
-            .await
+            .await?;
+        if let (BlockId::Number(BlockNumberOrTag::Number(block_number)), Some(out)) =
+            (block_id, &out)
+        {
+            if block_traces.len() > 1024 {
+                block_traces.retain(|block, _| *block < block_number - 512);
+            }
+            if is_state_diff {
+                block_traces.insert(block_number, out.clone());
+            }
+        }
+        Ok(out)
     }
 
     /// Returns all opcodes with their count and combined gas usage for the given transaction in no
