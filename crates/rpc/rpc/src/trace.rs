@@ -457,6 +457,10 @@ where
                 };
                 tracing::info!(target: "rpc::trace", "inserting cached traces");
                 block_traces.insert(block_number, vec![out.clone()]);
+
+                if block_traces.len() > 1024 {
+                    block_traces.retain(|block, _| *block < block_number - 512);
+                }
                 return Ok(Some(vec![out]));
             }
         }
