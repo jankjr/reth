@@ -423,10 +423,8 @@ where
             if is_state_diff {
                 let mut block_traces = self.block_traces.write().await;
                 if let Some(traces) = block_traces.get(&block_number) {
-                    tracing::info!(target: "rpc::trace", "returnning cached traces");
                     return Ok(Some(traces.clone()));
                 }
-                tracing::info!(target: "rpc::trace", "no cached traces, fetching from db");
                 let block = if let Some(block) = self.eth_api().recovered_block(block_id).await? {
                     block
                 } else {
@@ -455,7 +453,6 @@ where
                         vm_trace: None,
                     },
                 };
-                tracing::info!(target: "rpc::trace", "inserting cached traces");
                 block_traces.insert(block_number, vec![out.clone()]);
 
                 if block_traces.len() > 1024 {
